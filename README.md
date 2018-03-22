@@ -3,12 +3,12 @@
 
 # pmatch – A package for Haskell-like pattern matching in R
 
+[![Licence](https://img.shields.io/badge/licence-GPL--3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.en.html)
+[![lifecycle](http://img.shields.io/badge/lifecycle-maturing-blue.svg)](https://www.tidyverse.org/lifecycle/#maturing)
 [![Project Status:
 Active](http://www.repostatus.org/badges/latest/active.svg)](http://www.repostatus.org/#active)
-[![lifecycle](http://img.shields.io/badge/lifecycle-maturing-blue.svg)](https://www.tidyverse.org/lifecycle/#maturing)
-[![Licence](https://img.shields.io/badge/licence-GPL--3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.en.html)
-[![Last-changedate](https://img.shields.io/badge/last%20change-2018--02--28-orange.svg)](/commits/master)
-[![packageversion](https://img.shields.io/badge/Package%20version-0.1.2-orange.svg?style=flat-square)](commits/master)
+[![Last-changedate](https://img.shields.io/badge/last%20change-2018--03--22-green.svg)](/commits/master)
+[![packageversion](https://img.shields.io/badge/Package%20version-0.1.3-green.svg?style=flat-square)](commits/master)
 
 [![Travis-CI Build
 Status](http://travis-ci.org/mailund/pmatch.svg?branch=master)](https://travis-ci.org/mailund/pmatch)
@@ -214,6 +214,140 @@ f <- function(x) {
 x <- T(T(L(1),L(2)), T(T(L(3),L(4)),L(5)))
 f(x)
 #> [1] 1 2 3 4 5
+```
+
+### Binding local variables
+
+You can also assign to variables in the current namespace using
+subscripting on the special object `bind`:
+
+``` r
+bind[a,b] <- 1:2
+a
+#> [1] 1
+b
+#> [1] 2
+```
+
+With the `bind` object, you can match against patterns, as with the
+`cases` function, and matched variables will be added to the namespace
+where you invoke subscripting on `bind`:
+
+``` r
+x
+#> T(left = T(left = L(elm = 1), right = L(elm = 2)), right = T(left = T(left = L(elm = 3), right = L(elm = 4)), right = L(elm = 5)))
+bind[T(left, right)] <- x
+left
+#> T(left = L(elm = 1), right = L(elm = 2))
+right
+#> T(left = T(left = L(elm = 3), right = L(elm = 4)), right = L(elm = 5))
+```
+
+### Function transformations
+
+Since this package provides its functionality through a DSL, you *can*
+get into trouble when other parts of R tries to make sense of it.
+
+Consider this function:
+
+``` r
+is_leaf <- function(tree) {
+    cases(tree,
+          L(x) -> TRUE,
+          otherwise -> FALSE)
+}
+is_leaf(L(1))
+#> [1] TRUE
+is_leaf(T(L(1),L(2)))
+#> [1] FALSE
+```
+
+It works as intended, but if you try to byte-compile it, you get an
+error:
+
+``` r
+compiler::cmpfun(is_leaf)
+#> Error: bad assignment: 'TRUE <- L(x)'
+```
+
+This is because the byte-compiler tries to make meaning out of the `->
+TRUE` and `-> FALSE` assignments (it sees them as `TRUE <-` and `FALSE
+<-` because that is what the parser actually returns).
+
+There are two ways around this problem; one is easy and just requires a
+different syntax in the call to `cases`, the other is *almost* as easy,
+but requires that we transform the function.
+
+First, we can get around the issue using a formula syntax instead of an
+assignment syntax. Instead of the `is_leaf` above, we can define
+
+``` r
+other_is_leaf <- function(tree) {
+    cases(tree,
+          L(x) ~ TRUE,
+          otherwise ~ FALSE)
+}
+```
+
+This function, you can byte compile
+
+``` r
+compiler::cmpfun(other_is_leaf)
+#> function(tree) {
+#>     cases(tree,
+#>           L(x) ~ TRUE,
+#>           otherwise ~ FALSE)
+#> }
+#> <bytecode: 0x7fcbb2c4cc98>
+```
+
+The `pmatch` package makes no distinction betwen the `~` or the `->`
+syntax; you can use them interchangeable.
+
+Alternatively, we can transform the body of functions that calls `cases`
+to replace the DSL with `if`-statements.
+
+``` r
+is_leaf_tr <- transform_cases_function(is_leaf)
+is_leaf_tr
+#> function (tree) 
+#> {
+#>     if (!rlang::is_null(..match_env <- pmatch::test_pattern(tree, 
+#>         L(x)))) 
+#>         with(..match_env, TRUE)
+#>     else if (!rlang::is_null(..match_env <- pmatch::test_pattern(tree, 
+#>         otherwise))) 
+#>         with(..match_env, FALSE)
+#> }
+```
+
+After the transformation, the byte-compiler is happy.
+
+``` r
+is_leaf_tr_bc <- compiler::cmpfun(is_leaf_tr)
+is_leaf_tr_bc(L(1))
+#> [1] TRUE
+is_leaf_tr_bc(T(L(1),L(2)))
+#> [1] FALSE
+```
+
+Transformation has the added benefit of slightly speeding up the
+function. And, of course, being able to byte-compile can add a bit more
+to the performance.
+
+``` r
+microbenchmark::microbenchmark(
+    is_leaf(L(1)), is_leaf_tr(L(1)), is_leaf_tr_bc(L(1))
+)
+#> Unit: microseconds
+#>                 expr     min       lq     mean   median      uq      max
+#>        is_leaf(L(1)) 466.990 506.0890 739.9398 560.3095 860.519 2572.300
+#>     is_leaf_tr(L(1)) 329.298 367.6575 542.0151 424.9680 615.043 4348.246
+#>  is_leaf_tr_bc(L(1)) 328.325 375.8775 547.6445 430.3445 613.340 2568.045
+#>  neval
+#>    100
+#>    100
+#>    100
 ```
 
 For more examples, see below.
@@ -507,7 +641,7 @@ the plain search tree.
 
 ``` r
 insert_rec <- function(tree, x) {
-  match(tree,
+  cases(tree,
         E -> T(R, E, x, E),
         T(col, left, val, right) -> {
           if (x < val)
@@ -536,7 +670,7 @@ as simple as this:
 
 ``` r
 balance <- function(tree) {
-  match(tree,
+  cases(tree,
         T(B,T(R,a,x,T(R,b,y,c)),z,d) -> T(R,T(B,a,x,b),y,T(B,c,z,d)),
         T(B,T(R,T(R,a,x,b),y,c),z,d) -> T(R,T(B,a,x,b),y,T(B,c,z,d)),
         T(B,a,x,T(R,b,y,T(R,c,z,d))) -> T(R,T(B,a,x,b),y,T(B,c,z,d)),
