@@ -1,17 +1,5 @@
 
 
-#' Construct a pair-list of arguments that can be used to create a new function
-#'
-#' Given a list of argument names, construct a list of arguments with empty defaults.
-#'
-#' @param args List of variable names.
-#' @return A pair list that can be used with rlang::new_function.
-make_args_list <- function(args) {
-    res <- replicate(length(args), substitute())
-    names(res) <- args
-    as.pairlist(res)
-}
-
 #' Build a tibble form a list of constructor arguments.
 #'
 #' @param argument The argument provided to a constructor in its definition
@@ -57,26 +45,48 @@ process_constructor_function <- function(constructor, data_type_name, env) {
     constructor_name <- rlang::quo_name(constructor[[1]])
     constructor_arguments <- process_arguments(constructor[-1])
 
-    # create the constructor function
-    constructor <- function() {
-        args <- rlang::as_list(environment())
+    vars <- constructor_arguments$arg
+    list_expr <- rlang::expr(list(!!!rlang::syms(rlang::set_names(vars))))
 
-        # type check!
-        for (i in seq_along(args)) {
-            arg <- args[[constructor_arguments$arg[i]]]
-            type <- constructor_arguments$type[i]
-            if (!rlang::is_na(type) && !inherits(arg, type)) {
-                error_msg <- glue::glue(
-                    "The argument {arg} is of type {class(arg)} ",
-                    "but should be of type {type}."
-                )
-                stop(simpleError(error_msg, call = match.call()))
-            }
+    # there is a bit of code involved here, but it doesn't matter
+    # if it is slow. What matters is that the constructor is not.
+    no_typechecks <- 0
+    typechecks <- list()
+    for (i in seq_along(constructor_arguments)) {
+        arg <- constructor_arguments[i, ]
+        if (!is.na(arg$type)) {
+            var <- rlang::sym(arg$arg)
+            type <- arg$type
+
+            err_msg <- glue::glue(
+                "The argument {var} should be of type {type}."
+            )
+
+            ex <- rlang::expr(
+                if (!inherits(!!var, !!type)) {
+                    stop(simpleError(!!err_msg, call = match.call()))
+                }
+            )
+            typechecks <- c(typechecks, ex)
+            no_typechecks <- no_typechecks + 1
         }
-
-        structure(args, constructor = constructor_name, class = data_type_name)
     }
-    formals(constructor) <- make_args_list(constructor_arguments$arg)
+    length(typechecks) <- no_typechecks
+
+    # create the constructor function
+    func_args <- replicate(length(vars), rlang::missing_arg())
+    names(func_args) <- vars
+
+    body <- rlang::expr({
+        !!!typechecks
+        args <- !!list_expr
+        class(args) <- !!data_type_name
+        attr(args, "constructor") <- !!constructor_name
+        args
+    })
+    constructor <- rlang::new_function(
+        func_args, body, env
+    )
 
     # set meta information about the constructor
     class(constructor) <- c("constructor", "function")

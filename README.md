@@ -1,15 +1,14 @@
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
 
-# pmatch – A package for Haskell-like pattern matching in R
+# Haskell-like pattern matching in R
 
 [![Licence](https://img.shields.io/badge/licence-GPL--3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.en.html)
 [![lifecycle](http://img.shields.io/badge/lifecycle-maturing-blue.svg)](https://www.tidyverse.org/lifecycle/#maturing)
 [![Project Status:
 Active](http://www.repostatus.org/badges/latest/active.svg)](http://www.repostatus.org/#active)
-[![Last-changedate](https://img.shields.io/badge/last%20change-2018--03--22-green.svg)](/commits/master)
-[![packageversion](https://img.shields.io/badge/Package%20version-0.1.3-green.svg?style=flat-square)](commits/master)
-
+[![Last-changedate](https://img.shields.io/badge/last%20change-2018--10--19-green.svg)](/commits/master)
+[![packageversion](https://img.shields.io/badge/Package%20version-0.1.3.9003-orange.svg?style=flat-square)](commits/master)
 [![Travis-CI Build
 Status](http://travis-ci.org/mailund/pmatch.svg?branch=master)](https://travis-ci.org/mailund/pmatch)
 [![AppVeyor Build
@@ -18,15 +17,12 @@ Status](http://ci.appveyor.com/api/projects/status/wvyqe7bfp4a2rm77?svg=true)](h
 Status](http://img.shields.io/codecov/c/github/mailund/pmatch/master.svg)](https://codecov.io/github/mailund/pmatch?branch=master)
 [![Coverage
 Status](http://coveralls.io/repos/github/mailund/pmatch/badge.svg?branch=master)](https://coveralls.io/github/mailund/pmatch?branch=master)
-
 [![CRAN
 status](http://www.r-pkg.org/badges/version/pmatch)](https://cran.r-project.org/package=pmatch)
 [![CRAN
 downloads](http://cranlogs.r-pkg.org/badges/grand-total/pmatch)](https://cran.r-project.org/package=pmatch)
 [![minimal R
-version](https://img.shields.io/badge/R-%E2%89%A53.2-blue.svg)](https://cran.r-project.org/)
-
------
+version](https://img.shields.io/badge/R-%E2%89%A53.3-blue.svg)](https://cran.r-project.org/)
 
 The goal of the `pmatch` package is to provide structure pattern
 matching, similar to Haskell and ML, to R programmers. The package
@@ -166,13 +162,38 @@ first and we would be trying to add together `ONE(10)` and `ONE(-10)`,
 which would result in an error since we do not have an addition operator
 defined on these types.
 
-You can match any pattern using the bare keyword `otherwise`:
+The `cases` function can match any pattern since it has a generic
+algorithm for this. This makes the function slow. Intead of using
+`cases` you can create a function that only checks the patterns you
+provide it at creating time. For this, you use the `case_func` function.
 
 ``` r
-cases(42,
-      1 -> 1,
-      13 -> 13,
-      otherwise -> 24)
+g <- case_func(
+    ZERO               -> 0,
+    ONE(x)             -> x,
+    TWO(ONE(x),ONE(y)) -> x + y + 42,
+    TWO(x,y)           -> x + y,
+    THREE(x,y,z)       -> x + y + z
+)
+
+microbenchmark::microbenchmark(
+    f(TWO(ONE(10),ONE(-10))),
+    g(TWO(ONE(10),ONE(-10)))
+)
+#> Unit: microseconds
+#>                       expr     min       lq      mean  median      uq
+#>  f(TWO(ONE(10), ONE(-10))) 812.583 864.5305 1413.7400 913.962 987.142
+#>  g(TWO(ONE(10), ONE(-10)))   9.386  12.2300  123.1576  16.962  19.426
+#>       max neval
+#>  43292.57   100
+#>  10681.78   100
+```
+
+A variable will match any pattern, so you can use one as a default case.
+I prefer to use the `.` variable.
+
+``` r
+cases(42, 1 -> 1, 13 -> 13, . -> 24)
 #> [1] 24
 ```
 
@@ -191,7 +212,7 @@ constructors were not `numeric`:
 ONE(1)
 #> ONE(x = 1)
 ONE("foo")
-#> Error in ONE(x = "foo"): The argument foo is of type character but should be of type numeric.
+#> Error in ONE(x = "foo"): The argument x should be of type numeric.
 ```
 
 Constructors and pattern matching becomes even more powerful when you
@@ -202,15 +223,14 @@ a binary tree like this:
 tree := L(elm : numeric) | T(left : tree, right : tree)
 ```
 
-A very succinct depth first traversal that collects the leaves of such a
-tree can be written like this:
+You can then write a very succinct depth first traversal that collects
+the leaves of such a tree like this:
 
 ``` r
-f <- function(x) {
-    cases(x, 
-          L(v) -> v, 
-          T(left,right) -> c(f(left), f(right)))
-}
+f <- case_func(
+    L(v) -> v, 
+    T(left,right) -> c(f(left), f(right))
+)
 x <- T(T(L(1),L(2)), T(T(L(3),L(4)),L(5)))
 f(x)
 #> [1] 1 2 3 4 5
@@ -241,6 +261,45 @@ left
 #> T(left = L(elm = 1), right = L(elm = 2))
 right
 #> T(left = T(left = L(elm = 3), right = L(elm = 4)), right = L(elm = 5))
+```
+
+### Testing more than one pattern
+
+If you want to test more than one pattern at a time, you can use the
+`..` function:
+
+``` r
+f <- function(t1,t2) 
+    cases(..(t1, t2),
+          ..(L(.),L(.)) -> "Both leaves",
+          ..(L(.),.)    -> "Left leaf",
+          ..(.,L(.))    -> "Right leaf",
+          ..(.,.)       -> "None are leaves")
+
+f(L(0), L(2))
+#> [1] "Both leaves"
+f(L(0), x)
+#> [1] "Left leaf"
+f(x, L(42))
+#> [1] "Right leaf"
+f(x, x)
+#> [1] "None are leaves"
+```
+
+This will not work with functions created with `case_func`. Handling an
+arbitrary number of patterns requires checks are runtime, and
+`case_func` creates a function with specialised pattern checking at
+creation time.
+
+You can easily define data types to get similar behaviour, though:
+
+``` r
+tuples := ..(first, second) | ...(first, second, third)
+f <- case_func(..(.,.) -> 2, ...(.,.,.) -> 3)
+f(..(1, 2))
+#> [1] 2
+f(...(1, 2, 3))
+#> [1] 3
 ```
 
 ### Function transformations
@@ -298,7 +357,7 @@ compiler::cmpfun(other_is_leaf)
 #>           L(x) ~ TRUE,
 #>           otherwise ~ FALSE)
 #> }
-#> <bytecode: 0x7fcbb2c4cc98>
+#> <bytecode: 0x7f85dd540840>
 ```
 
 The `pmatch` package makes no distinction betwen the `~` or the `->`
@@ -341,9 +400,9 @@ microbenchmark::microbenchmark(
 )
 #> Unit: microseconds
 #>                 expr     min       lq     mean   median      uq      max
-#>        is_leaf(L(1)) 466.990 506.0890 739.9398 560.3095 860.519 2572.300
-#>     is_leaf_tr(L(1)) 329.298 367.6575 542.0151 424.9680 615.043 4348.246
-#>  is_leaf_tr_bc(L(1)) 328.325 375.8775 547.6445 430.3445 613.340 2568.045
+#>        is_leaf(L(1)) 264.228 275.4965 314.7998 290.6590 305.721 2134.119
+#>     is_leaf_tr(L(1)) 204.092 214.2180 289.6069 224.9885 234.918 3765.645
+#>  is_leaf_tr_bc(L(1)) 205.923 212.4610 229.7888 221.8180 237.637  370.995
 #>  neval
 #>    100
 #>    100
@@ -412,22 +471,18 @@ functions operating on linked lists should simply match on `NIL` and
 and reversing a list:
 
 ``` r
-list_length <- function(lst, acc = 0) {
-  force(acc)
-  cases(lst,
+list_length <- case_func(acc = 0,
         NIL -> acc,
-        CONS(car, cdr) -> list_length(cdr, acc + 1))
-}
+        CONS(car, cdr) -> list_length(cdr, acc + 1)
+)
 
 list_length(lst)
 #> [1] 3
 
-reverse_list <- function(lst, acc = NIL) {
-  force(acc)
-  cases(lst,
+reverse_list <- case_func(acc = NIL,
         NIL -> acc,
-        CONS(car, cdr) -> reverse_list(cdr, CONS(car, acc)))
-}
+        CONS(car, cdr) -> reverse_list(cdr, CONS(car, acc))
+)
 
 reverse_list(lst)
 #> CONS(car = 3, cdr = CONS(car = 2, cdr = CONS(car = 1, cdr = NIL)))
@@ -435,30 +490,22 @@ reverse_list(lst)
 
 Translating to and from vectors/`list` objects is relatively simple. To
 go from a vector to a linked list, we use `NIL` and `CONS`, and to go
-the other direction we use pattern matching:
+the other direction we use pattern
+matching:
 
 ``` r
-vector_to_list <- function(vec) {
-  lst <- NIL
-  for (i in seq_along(vec)) {
-    lst <- CONS(vec[[i]], lst)
-  }
-  reverse_list(lst)
-}
+vector_to_list <- function(vec) purrr::reduce_right(vec, ~ CONS(.y, .x), .init = NIL)
 
 list_to_vector <- function(lst) {
   n <- list_length(lst)
   v <- vector("list", length = n)
-  f <- function(lst, i) {
-    force(i)
-    cases(lst,
+  f <- case_func(i,
           NIL -> NULL,
           CONS(car, cdr) -> {
             v[[i]] <<- car
             f(cdr, i + 1)
             }
-          )
-  }
+  )
   f(lst, 1)
   v %>% unlist
 }
@@ -502,15 +549,14 @@ must be equal to the value. If we reach an empty tree in this search,
 then we know the value is no the tree.
 
 ``` r
-member <- function(tree, x) {
-  cases(tree,
+member <- case_func(x,
         E -> FALSE,
         T(left, val, right) -> {
           if (x < val) member(left, x)
           else if (x > val) member(right, x)
           else TRUE
-        })
-}
+        }
+)
 member(tree, 0)
 #> [1] FALSE
 member(tree, 1)
@@ -543,8 +589,7 @@ should be in the new tree, so we create an inner tree with two empty
 subtrees and the value.
 
 ``` r
-insert <- function(tree, x) {
-  cases(tree,
+insert <- case_func(x,
         E -> T(E, x, E),
         T(left, val, right) ->
           if (x < val)
@@ -553,8 +598,7 @@ insert <- function(tree, x) {
             T(left, val, insert(right, x))
           else
             T(left, x, right)
-        )
-}
+)
 
 tree <- E
 for (i in sample(2:4))
@@ -598,15 +642,14 @@ function for this data structure is the same as for the plain search
 tree.
 
 ``` r
-member <- function(tree, x) {
-  cases(tree,
+member <- case_func(x,
         E -> FALSE,
         T(col, left, val, right) -> {
           if (x < val) member(left, x)
           else if (x > val) member(right, x)
           else TRUE
-        })
-}
+        }
+)
 
 tree <- T(R, E, 2, T(B, E, 5, E))
 for (i in 1:6) {
@@ -640,8 +683,7 @@ from the recursive insertion calls that otherwise work as insertion in
 the plain search tree.
 
 ``` r
-insert_rec <- function(tree, x) {
-  cases(tree,
+insert_rec <- case_func(x,
         E -> T(R, E, x, E),
         T(col, left, val, right) -> {
           if (x < val)
@@ -650,8 +692,8 @@ insert_rec <- function(tree, x) {
             balance(T(col, left, val, insert_rec(right, x)))
           else
             T(col, left, x, right) # already here
-        })
-}
+        }
+)
 insert <- function(tree, x) {
   tree <- insert_rec(tree, x)
   tree$col <- B
